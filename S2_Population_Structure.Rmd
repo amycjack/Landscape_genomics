@@ -9,7 +9,7 @@ project = NULL
 project = snmf("snp.lfmm", K = 1:6, entropy = TRUE, repetitions = 10, project = "new")
 ```
 
-``{r Population Structure Viz, eval=TRUE}
+```{r Population Structure Viz, eval=TRUE}
 # Plot the sNMF
 pdf("sNMF.pdf")
 plot(project, col = "blue", pch = 19, cex = 1.2)
