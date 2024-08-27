@@ -1,0 +1,205 @@
+---
+title: "Fonio, Climate, and Genes Under Selection"
+author: "Amy Jackson"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Setting up the R environment and ensuring that code chunks are echoed
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, warning=FALSE,message=FALSE}
+library(raster)
+library(rgdal)
+library(terra)
+library(geodata)
+library(predicts)
+library(LEA)
+library(sf)
+library(terra)
+library(dplyr)
+library(spData)
+library(tmap)
+library(cartogram)
+library(tidyverse)
+library(gradientForest)
+library(factoextra)
+library(dplyr)
+library(data.table)
+library(readr)
+library(vegan)
+```
+
+## Step 1: Data Cleaning and Preparation
+### Downloading and Preparing Bioclimatic Data
+We start by downloading WorldClim bioclimatic variables at a resolution of 2.5 minutes. These variables will be used to assess the environmental conditions at the locations of our species observations.
+
+```{r bioclim part 1}
+# Download WorldClim bioclimatic variables at a resolution of 2.5 minutes
+# and save them in the "data/" directory
+bioclim_data <- worldclim_global(var = "bio", res = 2.5, path = "data/")
+
+# Extract the coordinate reference system (CRS) from the bioclimatic data
+crs_bioclim <- crs(bioclim_data)
+
+# Read observational data from a CSV file containing species coordinates
+obs_data <- read.csv("digitaria_coords.csv")
+
+# What does the data look like?
+head(obs_data)
+
+# Remove rows with missing latitude or longitude values
+obs_data <- obs_data[!is.na(obs_data$Latitude) & !is.na(obs_data$Longitude), ]
+
+# Convert the observational data to a simple features (sf) object
+# using the latitude and longitude columns, and set the CRS to WGS 84 (EPSG:4326)
+obs_sf <- st_as_sf(obs_data, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Create a data frame with longitude and latitude columns from the observational data
+coords <- data.frame(lon = obs_data$Longitude, lat = obs_data$Latitude)
+
+# Check if points are within the extent of the raster
+bioclim_extent <- ext(bioclim_data)
+within_extent <- coords$lon >= bioclim_extent$xmin & coords$lon <= bioclim_extent$xmax &
+  coords$lat >= bioclim_extent$ymin & coords$lat <= bioclim_extent$ymax
+
+if (!all(within_extent)) {
+  warning("Some points fall outside the extent of the raster data.")
+  coords <- coords[within_extent, ]
+}
+
+# Convert filtered points back to SpatVector
+points_vect <- vect(coords, geom = c("lon", "lat"), crs = crs_bioclim)
+```
+
+### Extracting Bioclimatic Values
+Here, we extract bioclimatic values at the observation points, which will later be used for PCA and other analyses.
+
+```{r bioclim part 2, echo=TRUE}
+# Extract bioclimatic values at observation points
+extracted_values <- terra::extract(bioclim_data, points_vect)
+
+# Combine extracted values with observation data
+obs_data_filtered <- obs_data[within_extent, ]
+obs_data <- cbind(obs_data_filtered, extracted_values)
+
+# Print the observation data with extracted bioclimatic values
+head(obs_data)
+
+obs_data <- write.csv(obs_data, "obs_data.csv")
+```
+
+## Step 2: Visualization with Maps
+### Plotting Observation Data on Maps
+We visualize the observation data on a map, overlaying it with environmental variables such as annual precipitation and temperature.
+
+```{r Map plotting, echo=TRUE}
+
+# Define the geographic extent based on observation data
+max_lat <- ceiling(max(obs_data$Latitude))
+min_lat <- floor(min(obs_data$Latitude))
+max_lon <- ceiling(max(obs_data$Longitude))
+min_lon <- floor(min(obs_data$Longitude))
+
+geographic_extent <- ext(c(min_lon, max_lon, min_lat, max_lat))
+sample_extent <- geographic_extent * 2
+
+# Crop the climate data based on your extent.
+bioclim_data <- crop(bioclim_data, sample_extent)
+
+# Check GPS points. Load and crop world map
+world_map <- world(resolution = 3, path = "data/")
+my_map <- crop(world_map, sample_extent)
+plot(my_map, axes = TRUE, col = "grey95")
+points(x = obs_data$Longitude, y = obs_data$Latitude, col = "black", pch = 20, cex = 1)
+
+# Check viz on your BioClim variables.
+blue_palette <- colorRampPalette(c("lightblue", "blue", "darkblue"))
+plot(bioclim_data[[12]], main="Annual Precipitation", col = blue_palette(100))
+plot(my_map, axes = FALSE, add=TRUE)
+points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "red")
+
+red_palette <- colorRampPalette(c("blue", "lightblue", "yellow", "orange", "red"))
+plot(bioclim_data[[1]], main="Annual Temperature", col = red_palette(100))
+plot(my_map, axes = FALSE, add=TRUE)
+points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "black")
+```
+
+## Step 3: Principal Component Analysis (PCA)
+### Performing PCA on Bioclimatic Data
+We conduct a PCA to explore the relationships between different bioclimatic variables and the geographic distribution of Fonio.
+
+```{r PCA, echo=TRUE}
+
+pca_data <- read.csv("obs_data.csv", header=TRUE)
+
+# Summarise number of accessions we have from each Country
+country_counts <- pca_data %>%
+  group_by(Country) %>%
+  summarize(count = n(), .groups = 'drop')
+
+print(country_counts)
+
+# Exploring the data
+ggplot(pca_data, aes(x=Longitude, y=Latitude,colour=bio1)) +
+geom_point(alpha=0.5) +
+facet_wrap(~Country)+
+theme_light() +
+  ggtitle("Average Temperature")
+
+
+ggplot(pca_data, aes(x=Longitude, y=Latitude,colour=bio12)) +
+geom_point(alpha=0.5) +
+facet_wrap(~Country)+
+theme_light() +
+  ggtitle("Average Precipitation")
+
+
+# Extract specific columns (5 to 23) from pca_data to use for PCA analysis
+mat_pca_control <- pca_data[, c(6:24)]
+
+# Perform Principal Component Analysis (PCA) on the selected data
+# Center and scale the data before performing PCA
+pca_con <- prcomp(mat_pca_control, center = TRUE, scale. = TRUE)
+
+# Visualize the PCA results
+# fviz_pca is a function from the factoextra package used for PCA visualization
+fviz_pca(pca_con,
+col.ind = pca_data$Country,
+pointshape = 19,
+pointsize = 2,
+labelsize = 3,
+legend.title = "Environment vs pots",
+geom.var = c("arrow", "text"),
+col.var = "black",
+label="var"
+)
+
+# Generate a correlation plot using the corPlot function from the psych package
+# This excludes the first column of mat_pca_control for the correlation plot
+psych::corPlot((mat_pca_control[,-c(1)]),
+               main = 'Correlation chart for all variables')
+
+# Only include chosen uncorrelated variables.
+filtered_data <- mat_pca_control[, c(3, 6, 7, 12, 15)]
+psych::corPlot(filtered_data, main = 'Unccorelated Variables')
+
+pca_con_filtered <- prcomp(filtered_data, center = TRUE, scale. = TRUE)
+fviz_pca(pca_con_filtered,
+col.ind = pca_data$Country,# color by groups
+pointshape = 19,
+pointsize = 2,
+labelsize = 3,
+legend.title = "Environment vs pots",
+geom.var = c("arrow", "text"),
+col.var = "black",
+label="var"
+)
+
+# write uncorrelated variables with no headers for LFMM input.
+
+write.table(filtered_data, "clim.env", sep="\t", quote=F, row.names=F, col.names=F)
+```
+
