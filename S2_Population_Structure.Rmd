@@ -1,0 +1,47 @@
+### Population Structure
+Check the population structure of your data, as this is an important parameter of LFMM. See where the level tapers off. K=6 has to lowest cross-entrophy value, which we will use for the LFMM analysis.
+
+```{r Population Structure, eval=TRUE}
+# Check population structure using the R package LEA. Running from one to six Ks. 
+library(LEA)
+
+project = NULL
+project = snmf("snp.lfmm", K = 1:6, entropy = TRUE, repetitions = 10, project = "new")
+```
+
+``{r Population Structure Viz, eval=TRUE}
+# Plot the sNMF
+pdf("sNMF.pdf")
+plot(project, col = "blue", pch = 19, cex = 1.2)
+dev.off()
+
+# Prep data for PCA
+genotype_data <- read.lfmm("snp.lfmm")
+constant_snps <- apply(genotype_data, 2, function(x) var(x, na.rm = TRUE) == 0)
+genotype_data_filtered <- genotype_data[, !constant_snps]
+
+write.lfmm(genotype_data_filtered, "snp_filtered_chrm1.lfmm")
+
+pc = pca("snp_filtered_chrm1.lfmm", scale = TRUE)
+tw = tracy.widom(pc)
+tw$pvalues[1:5]
+
+plot(tw$percentage)
+
+eigenvectors <- read.table("./snp_filtered.pca/snp_filtered.eigenvectors")
+obs_data <- read.csv("../obs_data_with_bioclimatic_values.csv", header = TRUE, sep = ",") # Adjust sep as needed
+countries <- as.factor(obs_data$Country)  # Convert country data to a factor
+country_colors <- rainbow(length(unique(countries)))[countries]  # Assign colors
+pc1 <- eigenvectors[, 1]  # First principal component
+pc2 <- eigenvectors[, 2]  # Second principal component
+
+pdf("PCA_popstructure.pdf")
+plot(pc1, pc2,
+     xlab = "PC1",
+     ylab = "PC2",
+     main = "PCA: PC1 vs PC2 by Country",
+     pch = 19,  # Solid circles
+     col = country_colors)  # Color points by country
+legend("topright", legend = levels(countries), col = rainbow(length(unique(countries))), pch = 19, cex = 0.7)
+dev.off()
+```
