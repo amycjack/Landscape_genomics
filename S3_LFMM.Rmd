@@ -1,0 +1,192 @@
+---
+title: "Fonio, Climate, and Genes Under Selection"
+author: "Amy Jackson"
+date: "2024-07-29"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+# Setting up the R environment and ensuring that code chunks are echoed
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, warning=FALSE,message=FALSE}
+library(raster)
+library(rgdal)
+library(terra)
+library(geodata)
+library(predicts)
+library(LEA)
+library(sf)
+library(terra)
+library(dplyr)
+library(spData)
+library(tmap)
+library(cartogram)
+library(tidyverse)
+library(gradientForest)
+library(factoextra)
+library(dplyr)
+library(data.table)
+library(readr)
+library(vegan)
+```
+# Run the LFMM. Adjust parameters.
+```{r LFMM, eval=TRUE}
+project = NULL
+project = lfmm("snp_test.lfmm", "clim.env", K = 6, repetitions = 3, CPU = 12, iterations = 1000, burnin = 500, project = "new")
+```
+
+### Reading results of LFMM
+```{R Results, eval=TRUE}
+# you can reload the lfmm model results with the below line.
+# If results are transfered from a HPC, change the projDir in *lfmmProject. "C:/Users/aja10kg/OneDrive - The Royal Botanic Gardens, Kew/Digitaria_spatial_genomics/"
+# project = load.lfmmProject("snp_test_clim.lfmmProject")
+
+# bio3
+z.bio3 = z.scores(project, K = 6, d = 1)  # PC1 for bio3
+z.bio3 <- apply(z.bio3, 1, median)
+lambda.bio3 = median(z.bio3^2)/qchisq(0.5, df = 1)
+lambda.bio3
+p.bio3.adj = pchisq(z.bio3^2/lambda.bio3, df = 1, lower = FALSE)
+
+# bio6
+z.bio6 = z.scores(project, K = 6, d = 2)  # PC2 for bio6
+z.bio6 <- apply(z.bio6, 1, median)
+lambda.bio6 = median(z.bio6^2)/qchisq(0.5, df = 1)
+lambda.bio6
+p.bio6.adj = pchisq(z.bio6^2/lambda.bio6, df = 1, lower = FALSE)
+
+# bio7
+z.bio7 = z.scores(project, K = 6, d = 3)  # PC3 for bio7
+z.bio7 <- apply(z.bio7, 1, median)
+lambda.bio7 = median(z.bio7^2)/qchisq(0.5, df = 1)
+lambda.bio7
+p.bio7.adj = pchisq(z.bio7^2/lambda.bio7, df = 1, lower = FALSE)
+
+# bio12
+z.bio12 = z.scores(project, K = 6, d = 4)  # PC4 for bio12
+z.bio12 <- apply(z.bio12, 1, median)
+lambda.bio12 = median(z.bio12^2)/qchisq(0.5, df = 1)
+lambda.bio12
+p.bio12.adj = pchisq(z.bio12^2/lambda.bio12, df = 1, lower = FALSE)
+
+# bio15
+z.bio15 = z.scores(project, K = 6, d = 5)  # PC5 for bio15
+z.bio15 <- apply(z.bio15, 1, median)
+lambda.bio15 = median(z.bio15^2)/qchisq(0.5, df = 1)
+lambda.bio15
+p.bio15.adj = pchisq(z.bio15^2/lambda.bio15, df = 1, lower = FALSE)
+
+# Histograms
+pdf("LFMM_P_Histograms.pdf")
+par(mfrow = c(2,3))  # Adjusted for 5 variables
+hist(p.bio3.adj, col = "blue", main = "bio3", xlab='')
+hist(p.bio6.adj, col = "blue", main = "bio6", xlab='')
+hist(p.bio7.adj, col = "blue", main = "bio7", xlab='')
+hist(p.bio12.adj, col = "blue", main = "bio12", xlab='')
+hist(p.bio15.adj, col = "blue", main = "bio15", xlab='')
+dev.off()
+
+# Correct for multiple testing
+q.bio3 <- qvalue(p.bio3.adj)$qvalues
+q.bio6 <- qvalue(p.bio6.adj)$qvalues
+q.bio7 <- qvalue(p.bio7.adj)$qvalues
+q.bio12 <- qvalue(p.bio12.adj)$qvalues
+q.bio15 <- qvalue(p.bio15.adj)$qvalues
+
+# Manhattan plots
+pdf("LFMM_Manhattan.pdf")
+par(mfrow = c(2,3))  # Adjusted for 5 variables
+plot(-log10(q.bio3), pch = 19, col = "blue", cex = .7, xlab = 'SNP', ylab = '-log10(q-value)', main = "bio3")
+plot(-log10(q.bio6), pch = 19, col = "blue", cex = .7, xlab = 'SNP', ylab = '-log10(q-value)', main = "bio6")
+plot(-log10(q.bio7), pch = 19, col = "blue", cex = .7, xlab = 'SNP', ylab = '-log10(q-value)', main = "bio7")
+plot(-log10(q.bio12), pch = 19, col = "blue", cex = .7, xlab = 'SNP', ylab = '-log10(q-value)', main = "bio12")
+plot(-log10(q.bio15), pch = 19, col = "blue", cex = .7, xlab = 'SNP', ylab = '-log10(q-value)', main = "bio15")
+dev.off()
+
+# Significant SNPs with high or low z-scores
+sum(q.bio3 < 0.01 & abs(z.bio3) > 2)
+sum(q.bio6 < 0.01 & abs(z.bio6) > 2)
+sum(q.bio7 < 0.01 & abs(z.bio7) > 2)
+sum(q.bio12 < 0.01 & abs(z.bio12) > 2)
+sum(q.bio15 < 0.01 & abs(z.bio15) > 2)
+
+# SNPs with significant relationship with climate
+sum(
+  q.bio3 < 0.01 & abs(z.bio3) > 2 |
+  q.bio6 < 0.01 & abs(z.bio6) > 2 |
+  q.bio7 < 0.01 & abs(z.bio7) > 2 |
+  q.bio12 < 0.01 & abs(z.bio12) > 2 |
+  q.bio15 < 0.01 & abs(z.bio15) > 2
+)
+
+# Combine results
+lfmm.results <- cbind(z.bio3, q.bio3, z.bio6, q.bio6, z.bio7, q.bio7, z.bio12, q.bio12, z.bio15, q.bio15)
+head(lfmm.results)  # Note that the SNP locus numbers and positions are absent.
+
+# Write results
+snp.names <- read.table("snp.012.pos", header = FALSE)
+colnames(snp.names) <- c("locus", "position")
+lfmm.results <- cbind(snp.names, lfmm.results)
+head(lfmm.results)  # Now we have a clear table with locus names and LFMM results
+
+write.table(lfmm.results, "lfmm.results", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+### Exploring signficant adaptive SNP results of the LFMM, and Preparing data for GF
+```{r LFMM_results, eval=TRUE}
+
+# Load SNP dataset from the file "snp.forR". Due to the large size of the SNP file, we'll use the readr package.
+snp <- read_tsv("snp.forR", col_types = NULL, skip = 0)
+names(snp)[1] <- "last_name"
+length(snp)
+
+
+# Identify significant SNPs for multiple bioclimatic variables using specified thresholds
+lfmm.sig <- which(
+  (lfmm.results$q.bio3 < 0.01 & abs(lfmm.results$z.bio3) > 2) |
+  (lfmm.results$q.bio6 < 0.01 & abs(lfmm.results$z.bio6) > 2) |
+  (lfmm.results$q.bio7 < 0.01 & abs(lfmm.results$z.bio7) > 2) |
+  (lfmm.results$q.bio12 < 0.01 & abs(lfmm.results$z.bio12) > 2) |
+  (lfmm.results$q.bio15 < 0.01 & abs(lfmm.results$z.bio15) > 2)
+)
+
+# Print the number of significant SNPs
+length(lfmm.sig)
+
+# Subset the SNP dataset to include only the significant adaptive SNPs (redundant line, can be removed)
+snp.adaptive <- snp[, lfmm.sig]
+
+length(lfmm.sig)
+
+# Print the dimensions of the subsetted SNP dataset
+dim(snp.adaptive)
+
+# Save snp.adaptive as a CSV file
+write.csv(snp.adaptive, file = "snp_adaptive.csv", row.names = FALSE)
+
+# Write the lfmm results to only include sig SNPs
+lfmm.results.subset <- lfmm.results[lfmm.sig, ]
+
+write.csv(lfmm.results.subset, file = "lfmm_results_sigSNPs.csv", row.names = FALSE)
+```
+
+### Adaptive SNP annotation
+```{r SNP Annotation, eval=TRUE}
+library(dplyr)
+
+annotation <- read.csv("fonio_annotation.csv")
+
+# Filter annotation table by matching locus to Chromosome
+filtered_annotation <- annotation %>%
+  filter(Chomosome %in% lfmm.results.subset$locus)
+
+# Join filtered_annotation with lfmm.results.subset by locus and then filter by position. Searches for SNP within a 10k up and down stream of a gene.
+final_result <- filtered_annotation %>%
+  inner_join(lfmm.results.subset, by = c("Chomosome" = "locus")) %>%
+  filter(position >= (Start - 10000) & position <= (Stop + 10000))
+
+write.csv(final_result, file = "lfmm_results_sigSNPs_annotated.csv", row.names = FALSE)
+```
