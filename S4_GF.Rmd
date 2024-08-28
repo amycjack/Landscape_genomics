@@ -1,0 +1,163 @@
+---
+title: "Fonio, Climate, and Genes Under Selection"
+author: "Amy Jackson"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r libraries, warning=FALSE,message=FALSE}
+library(raster)
+library(rgdal)
+library(terra)
+library(geodata)
+library(predicts)
+library(LEA)
+library(sf)
+library(terra)
+library(dplyr)
+library(spData)
+library(tmap)
+library(cartogram)
+library(tidyverse)
+library(gradientForest)
+library(factoextra)
+library(dplyr)
+library(data.table)
+library(readr)
+library(vegan)
+
+```
+
+```{r setup, include=FALSE}
+# Setting up the R environment and ensuring that code chunks are echoed
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## GF Modelling
+### Prepring and running model
+### Running GF
+```{r Running GF, eval=TRUE}
+library(gradientForest)
+library(vegan)
+library(readr)
+
+# Read the selected SNP file
+snp <- read_tsv("snp.forR", col_types = NULL, skip = 0)
+names(snp)[1] <- "last_name"
+snp_filtered <- snp[, colSums(is.na(snp)) == 0]
+
+clim.points <-read.csv("obs_data_with_bioclimatic_values.csv")
+coord <- clim.points[,c("Longitude","Latitude")]
+pcnm <- pcnm(dist(coord))  #this generates the PCNMs, you could stop here if you want all of them
+keep <- round(length(which(pcnm$value > 0))/2)
+pcnm.keep <- scores(pcnm)[,1:keep]  #keep half of positive ones as suggested by some authors
+
+
+env.gf <- cbind(clim.points[,c("bio3", "bio6", "bio7", "bio12", "bio15")], pcnm.keep)
+maxLevel <- log2(0.368*nrow(env.gf)/2)
+gf <- gradientForest(cbind(env.gf, snp_filtered), predictor.vars=colnames(env.gf), response.vars=colnames(snp_filtered), ntree=500, maxLevel=maxLevel, trace=T, corr.threshold=0.50)
+save(gf, file = output_file)
+
+```
+
+
+### Reading GF Modelling Results
+
+```{r GF Modeling2, eval=TRUE}
+
+plot(gf, plot.type = "O")
+by.importance <- names(importance(gf))
+plot(gf, plot.type = "C", imp.vars = by.importance, show.species = F, common.scale = T, cex.axis = 1, cex.lab = 1.2, line.ylab = 1, par.args = list(mgp = c(1.5, 0.5, 0), mar = c(2.5, 2, 2, 2), omi = c(0.2, 0.3, 0.2, 0.4)))
+
+print(names(bioclim_data))
+# Rename the bioclim_data to match my env dataset
+new_names <- paste0("bio", seq(1, 19))
+if (length(new_names) == nlyr(bioclim_data)) {
+  names(bioclim_data) <- new_names
+} else {
+  stop("Number of new names does not match the number of layers in the SpatRaster object")
+}
+
+clim.land <- as.data.frame(bioclim_data, cells = TRUE, na.rm = TRUE)
+clim.land <- na.omit(clim.land)
+
+
+# Filter to only include our un-correlated variables, and first column.
+clim.land_filtered <- clim.land[, c(1, 4, 7, 8, 13, 16)] 
+
+
+# PCA
+pred <- predict(gf, clim.land_filtered[,-1])  #note the removal of the cell ID column with [,-1]
+pca <- prcomp(pred, center=T, scale.=F)
+
+#Assign PCs to colors
+a1 <- pca$x[, 1]
+a2 <- pca$x[, 2]
+a3 <- pca$x[, 3]
+
+r <- a1 + a2
+g <- -a2
+b <- a3 + a2 - a1
+
+r <- (r - min(r))/(max(r) - min(r)) * 255
+g <- (g - min(g))/(max(g) - min(g)) * 255
+b <- (b - min(b))/(max(b) - min(b)) * 255
+
+nvs <- dim(pca$rotation)
+vec <- c("bio6", "bio7", "bio8", "bio16")
+lv <- length(vec)
+vind <- rownames(pca$rotation) %in% vec
+scal <- 500
+xrng <- range(pca$x[, 1], pca$rotation[, 1]/scal) * 1.1
+yrng <- range(pca$x[, 2], pca$rotation[, 2]/scal) * 1.1
+
+# Plot PCA points
+
+plot(pca$x[, 1:2], xlim = xrng, ylim = yrng, pch = 16, cex = 0.6, 
+     col = rgb(r, g, b, max = 255), asp = 1, 
+     xlab = "PC1", ylab = "PC2", main = "PCA Plot with Variable Loadings: 50k SNPs")
+
+# Add PCA loading vectors as arrows
+arrows(rep(0, sum(vind)), rep(0, sum(vind)),
+       pca$rotation[vind, 1] / scal, pca$rotation[vind, 2] / scal, 
+       length = 0.1, col = "black")
+
+# Add points for loading vectors
+points(pca$rotation[!vind, 1] / scal, pca$rotation[!vind, 2] / scal, pch = "+", col = "black")
+
+# Add labels for the loading vectors
+text(pca$rotation[vind, 1] / scal, pca$rotation[vind, 2] / scal, 
+     labels = rownames(pca$rotation)[vind], pos = 4, cex = 0.7, col = "blue")
+
+
+#Define raster properties with existing one
+mask <- bioclim_data$bio6
+
+rastR <- mask
+rastG <- mask
+rastB <- mask
+
+rastR[clim.land_filtered$cell] <- r
+rastG[clim.land_filtered$cell] <- g
+rastB[clim.land_filtered$cell] <- b
+
+#Stack color rasters
+rgb.rast <- c(rastR, rastG, rastB)
+
+plotRGB(rgb.rast, bgalpha=0.5)
+points(obs_data$Longitude, obs_data$Latitude, col = "black", pch = 20, cex = 1)
+plot(my_map, axes = FALSE, add=TRUE)
+
+```
+
+### Running the GF model with adaptive SNPs
+```{r RF Climate2, eval=TRUE, error=FALSE, warning=FALSE}
+# Rerun gradientForest model with only the adaptive SNPs.
+maxLevel <- log2(0.368*nrow(env.gf)/2)
+if(sum(is.na(snp.adaptive))>0){snp.adaptive[is.na(snp.adaptive)] <- 0}
+
+gf.adaptive <- gradientForest(cbind(env.gf, snp.adaptive), predictor.vars=colnames(env.gf), response.vars=colnames(snp.adaptive), ntree=500, maxLevel=maxLevel, trace=T, corr.threshold=0.50)
+save(gf.adaptive, file = "gf_50k_adaptive.output")
+
+pred.adaptive <- predict(gf.adaptive, clim.land_filtered[,-1])
+```
