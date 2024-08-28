@@ -1,0 +1,215 @@
+---
+title: "Fonio, Climate, and Genes Under Selection"
+author: "Amy Jackson"
+date: "2024-07-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Setting up the R environment and ensuring that code chunks are echoed
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, warning=FALSE,message=FALSE}
+library(raster)
+library(rgdal)
+library(terra)
+library(geodata)
+library(predicts)
+library(LEA)
+library(sf)
+library(terra)
+library(dplyr)
+library(spData)
+library(tmap)
+library(cartogram)
+library(tidyverse)
+library(gradientForest)
+library(factoextra)
+library(dplyr)
+library(data.table)
+library(readr)
+library(vegan)
+
+```
+
+## Comparing overall and adaptive genetic variation
+```{r RF Climate3, eval=TRUE}
+
+#Extract cumulative importance data from GF results. Note that these commands retrieve all the predictors, despite specifying only one. Also note that you could set type="Species" if you want to extract data for individual loci.
+gf.cumimp <- cumimp(gf, predictor="bio7", type="Overall")
+gf.adaptive.cumimp <- cumimp(gf.adaptive, predictor="bio3", type="Overall" )
+
+par(mfrow = c(4,2))
+plot(cumimp(gf.adaptive, "bio3", standardize=FALSE), main="", ylab="Cumulative importance", xlab='bio3', type='l', lwd=2, lty="dashed", col="red")
+lines(cumimp(gf, "bio6"),type='l',col="black", lwd=2)
+legend("bottomright", box.lty=0, legend=c("All", "Adaptive"), lwd=c(2,2), col=c("black", "red"), lty=c("solid", "dashed"))
+
+plot(cumimp(gf.adaptive, "bio6", standardize=FALSE), main="", ylab="Cumulative importance", xlab='bio6', type='l', lwd=2, lty="dashed", col="red")
+lines(cumimp(gf, "bio6"),type='l',col="black", lwd=2)
+legend("bottomright", box.lty=0, legend=c("All", "Adaptive"), lwd=c(2,2), col=c("black", "red"), lty=c("solid", "dashed"))
+
+plot(cumimp(gf.adaptive, "bio7", standardize=FALSE), main="", ylab="Cumulative importance", xlab='bio7', type='l', lwd=2, lty="dashed", col="red")
+lines(cumimp(gf, "bio7"),type='l',col="black", lwd=2)
+legend("bottomright", box.lty=0, legend=c("All", "Adaptive"), lwd=c(2,2), col=c("black", "red"), lty=c("solid", "dashed"))
+
+plot(cumimp(gf.adaptive, "bio12", standardize=FALSE), main="", ylab="Cumulative importance", xlab='bio12', type='l', lwd=2, lty="dashed", col="red")
+lines(cumimp(gf, "bio12"),type='l',col="black", lwd=2)
+legend("bottomright", box.lty=0, legend=c("All", "Adaptive"), lwd=c(2,2), col=c("black", "red"), lty=c("solid", "dashed"))
+
+plot(cumimp(gf.adaptive, "bio15", standardize=FALSE), main="", ylab="Cumulative importance", xlab='bio15', type='l', lwd=2, lty="dashed", col="red")
+lines(cumimp(gf, "bio15"),type='l',col="black", lwd=2)
+legend("bottomright", box.lty=0, legend=c("All", "Adaptive"), lwd=c(2,2), col=c("black", "red"), lty=c("solid", "dashed"))
+
+par(mfrow = c(1,1))
+
+# Where adaptive genetic deviates most from landscape patterns of background genetic variantion
+pred <- predict(gf, clim.land_filtered[,-1])  
+pca <- prcomp(pred, center=T, scale.=F)
+
+pred.adaptive <- predict(gf.adaptive, clim.land_filtered[,-1])  
+pca.adaptive <- prcomp(pred.adaptive, center=T, scale.=F)
+
+diff.procrustes = procrustes(pca.adaptive, pca, scale=TRUE, symmetrical=FALSE)
+resids = residuals(diff.procrustes)
+
+#Specify raster properties based on an existing one
+rastProc <- bioclim_data$bio1  
+
+#Assign residuals to raster cells
+rastProc[clim.land_filtered$cell] <- resids  
+
+#Map the results
+par(mfrow=c(1, 1))
+plot(rastProc, col = rev( rainbow( 99, start = 0, end = 0.2 ) ))
+points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "black")
+plot(my_map, axes = FALSE, add=TRUE)
+```
+
+## Mapping future predictions
+```{r RF Climate4, eval=FALSE}
+library(raster)
+library(knitr)
+setwd("C:/Users/aja10kg/OneDrive - The Royal Botanic Gardens, Kew/Digitaria_spatial_genomics")
+
+# Load necessary libraries
+library(raster)
+library(terra)
+
+# Function to process future climate data
+process_future_climate <- function(filepath, extent_vals, selected_layers, gf_adaptive, pred_adaptive) {
+  # Load climate data
+  clim_future <- stack(filepath)
+  
+  # Rename layers
+  new_names <- paste0("bio", seq(1, 19))
+  if (length(new_names) == nlayers(clim_future)) {
+    names(clim_future) <- new_names
+  } else {
+    stop("Number of new names does not match the number of layers in the RasterStack object")
+  }
+
+  # Crop raster to the defined extent
+  clim_future <- crop(clim_future, extent(extent_vals))
+  
+  # Extract and clean data
+  extracted_data <- raster::extract(clim_future, 1:ncell(clim_future), df = TRUE)
+  clim_land_future <- na.omit(extracted_data)
+  
+  # Filter selected layers
+  clim_land_future_filtered <- clim_land_future[, selected_layers]
+  
+  # Predict future adaptive traits
+  pred_adaptive_future <- predict(gf_adaptive, clim_land_future_filtered[,-1])
+  
+  # Calculate genetic offset
+  genetic_offset <- sqrt(rowSums((pred_adaptive_future - pred_adaptive)^2))
+  
+  # Define and assign genetic offset values to raster
+  rast_offset <- clim_future[[12]]  # Assuming bio12 is the desired layer
+  rast_offset[clim_land_future$ID] <- genetic_offset
+  
+  return(rast_offset)
+}
+
+# Define parameters
+extent_vals <- c(-23, 13, 1, 21)
+selected_layers <- c(1, 4, 7, 8, 13, 16)
+
+# Process first future climate scenario
+rast_offset <- process_future_climate(
+  filepath = "./data/future/wc2.1_2.5m_bioc_ACCESS-CM2_ssp585_2081-2100.tif",
+  extent_vals = extent_vals,
+  selected_layers = selected_layers,
+  gf_adaptive = gf.adaptive,
+  pred_adaptive = pred.adaptive
+)
+
+# Process second future climate scenario
+rast_offset2 <- process_future_climate(
+  filepath = "./data/future/wc2.1_2.5m_bioc_ACCESS-CM2_ssp126_2081-2100.tif",
+  extent_vals = extent_vals,
+  selected_layers = selected_layers,
+  gf_adaptive = gf.adaptive,
+  pred_adaptive = pred.adaptive
+)
+
+# Plot the results for both scenarios
+par(mfrow = c(1, 2))
+plot(rast_offset, col = rev(rainbow(99, start = 0, end = 0.4)))
+plot(my_map, axes = FALSE, add = TRUE)
+points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "black")
+
+plot(rast_offset2, col = rev(rainbow(99, start = 0, end = 0.4)))
+plot(my_map, axes = FALSE, add = TRUE)
+points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "black")
+```
+
+### Plotting all maps together
+```{r RF Climate5, eval=FALSE}
+# Step 1: Calculate the range of values across all three rasters
+value_range <- range(c(values(rast.offset), values(rastProc), values(rast.offset2)), na.rm = TRUE)
+
+# Step 2: Define a consistent color palette
+color_palette <- colorRampPalette(rev(rainbow(99, start = 0, end = 0.8)))(100)
+# Load necessary libraries (if not already loaded)
+# library(raster)  # Assuming raster is being used for raster objects
+
+# Step 1: Calculate the range of values across all three rasters
+value_range <- range(c(values(rast.offset), values(rastProc), values(rast.offset2)), na.rm = TRUE)
+
+# Step 2: Define a consistent color palette
+color_palette <- colorRampPalette(rev(rainbow(99, start = 0, end = 0.8)))(100)
+
+# Step 3: Define the breaks for consistent color mapping
+breaks <- seq(value_range[1], value_range[2], length.out = 101)
+
+# Step 4: Save the plots as a TIFF file with improved scales
+pdf("climate_scenarios_plots.pdf", width = 10, height = 10, paper = "a4r")
+
+# Setup layout to have 2x2 plots (in case you want to add more plots later)
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 5))
+
+# Custom function to plot with a legend
+plot_with_legend <- function(raster_data, title) {
+  plot(raster_data, col = color_palette, breaks = breaks, main = title, 
+       cex.main = 1.5, # Increase the title size
+       cex.axis = 1.2, # Increase the axis label size
+       cex.lab = 1.3,  # Increase the axis title size
+       legend.args = list(text = 'Value', side = 4, font = 2, line = 2.5, cex = 1.2)) # Customize the legend
+  plot(my_map, axes = FALSE, add = TRUE)
+  points(x = obs_data$Longitude, y = obs_data$Latitude, pch = 20, cex = 0.75, col = "black")
+}
+
+# Plot 1: Future best case
+plot_with_legend(rast.offset2, "Plot 1: Future best case")
+
+# Plot 2: Future worst case
+plot_with_legend(rast.offset, "Plot 2: Future worst case")
+
+# Plot 3: Current Climate
+plot_with_legend(rastProc, "Plot 3: Current Climate")
+
+# Close the TIFF device to save the file
+dev.off()
+```
